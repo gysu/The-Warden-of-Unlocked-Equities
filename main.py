@@ -244,12 +244,12 @@ for _, row in df_stocks.iterrows():
 
         ma_slope = calc_disposal_ma20_slope(stock_data, start_dt)
 
-        if pct <= -20:
-            warning = '🔴跌逾20%'
+        if pct <= -10:
+            warning = '🔴跌逾10%'
         elif pct <= -15:
             warning = '🟠跌逾15%'
-        elif pct >= 20:
-            warning = '🟢漲逾20%'
+        elif pct >= 10:
+            warning = '🟢漲逾10%'
         else:
             warning = ''
 
