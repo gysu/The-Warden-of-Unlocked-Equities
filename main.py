@@ -1,22 +1,22 @@
 import io
-import json
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import pandas as pd
 import requests
+from tabulate import tabulate
 import yfinance as yf
 
 # ==========================================
-# 0. Discord Webhook 文字推播模組 (支援長訊息自動分段)
+# 0. Discord Webhook 文字推播模組
 # ==========================================
+
+
 def send_discord_table_message(webhook_url, content_text):
-    """將文字/表格透過 Discord Webhook 發送，若超過 1900 字自動切段發送"""
     if not webhook_url:
         print('⚠️ 未設定 DISCORD_WEBHOOK_URL，跳過 Discord 發送。')
         return
 
-    # Discord 單則上限 2000 字，留 buffer 設 1900
     chunks = []
     lines = content_text.split('\n')
     curr_chunk = ''
@@ -60,14 +60,20 @@ headers = {
 }
 
 print('📥 開始抓取處置股清單...')
+df_raw = pd.DataFrame()
+
 try:
     response = requests.get(url, headers=headers, timeout=15)
     response.raise_for_status()
-    dfs = pd.read_html(io.StringIO(response.text), match='出關日')
-    df_raw = dfs[0]
+    dfs = pd.read_html(io.StringIO(response.text))
+    for d in dfs:
+        if '出關日' in str(d.columns) or any('出關' in str(c) for c in d.columns):
+            df_raw = d
+            break
+    if df_raw.empty and len(dfs) > 0:
+        df_raw = dfs[0]
 except Exception as e:
-    print(f'❌ 抓取處置股網頁失敗: {e}')
-    df_raw = pd.DataFrame()
+    print(f'❌ 抓取或解析處置股網頁失敗: {e}')
 
 
 def clean_column_name(col):
@@ -81,7 +87,7 @@ if not df_raw.empty:
     print('欄位：', list(df_raw.columns))
 
 # ==========================================
-# 2. 日期字串清理與交易日剩餘計算
+# 2. 日期字串清理與交易日計算
 # ==========================================
 
 today = datetime.now()
@@ -128,10 +134,7 @@ stocks = []
 
 if not df_raw.empty:
     for _, row in df_raw.iterrows():
-        if pd.isna(row.get('代號')):
-            continue
-
-        code = str(row['代號']).strip()
+        code = str(row.get('代號', '')).strip()
         if not code.isdigit():
             continue
 
@@ -276,12 +279,13 @@ for _, row in df_stocks.iterrows():
 
 
 # ==========================================
-# 6. 格式化 DataFrame 並發送到 Discord
+# 6. 發送 Discord 通知
 # ==========================================
-df_result = pd.DataFrame(results)
 
-if not df_result.empty:
-    # 1. 調整適合 Discord 等寬字體閱讀的精簡欄位
+webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
+
+if results:
+    df_result = pd.DataFrame(results)
     display_cols = [
         '市場',
         '代號',
@@ -294,8 +298,6 @@ if not df_result.empty:
         '警示',
     ]
     df_discord = df_result[[c for c in display_cols if c in df_result.columns]]
-
-    # 欄位簡化，縮短寬度避免手機破版
     df_discord = df_discord.rename(
         columns={
             '剩餘交易日': '剩餘',
@@ -304,11 +306,9 @@ if not df_result.empty:
         }
     )
 
-    # 2. 使用 tabulate 轉為終端機風格等寬表格 (grid 或 pipe)
     table_str = tabulate(
         df_discord, headers='keys', tablefmt='pipe', showindex=False
     )
-
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
     message = (
         f'📊 **處置股分析結果彙整** ({now_str})\n'
@@ -318,9 +318,10 @@ if not df_result.empty:
 
     print('\n===== 處置股分析結果 =====')
     print(table_str)
-
-    webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
     send_discord_table_message(webhook_url, message)
 else:
-    print('查無有效資料。')
-
+    print('⚠️ 查無有效資料，發送空資料提醒至 Discord。')
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    send_discord_table_message(
+        webhook_url, f'📊 **處置股分析** ({now_str})\n今日無處置股資料。'
+    )
