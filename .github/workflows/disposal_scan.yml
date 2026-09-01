@@ -1,0 +1,50 @@
+name: Run Disposal Stock Scan
+
+on:
+  schedule:
+    # 台灣時間週一至週五 09:00 執行 (UTC 08:00)
+    - cron: '0 8 * * 1-5'
+  workflow_dispatch: # 支援 GitHub 網頁手動觸發
+
+jobs:
+  run-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Disposal Scan Script
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python disposal_scan.py
+
+      - name: Upload CSV Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: disposal-stocks-report
+          path: disposal_stocks_report.csv
+          retention-days: 7
+
+      - name: Send Discord Failure Alert
+        if: failure() || cancelled()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          curl -H "Content-Type: application/json" \
+               -X POST \
+               -d "{\"embeds\": [{\"title\": \"🚨 處置股掃描執行失敗！\", \"description\": \"工作流程發生異常或超時，請檢查日誌。\", \"color\": 15158332, \"fields\": [{\"name\": \"工作流程\", \"value\": \"\`${{ github.workflow }}\`\", \"inline\": true}, {\"name\": \"詳細日誌\", \"value\": \"[點此查看 Log](${RUN_URL})\", \"inline\": true}]}]}" \
+               "${DISCORD_WEBHOOK_URL}"
