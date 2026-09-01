@@ -71,7 +71,7 @@ def send_discord_table_message(webhook_url, content_text):
 # 1. 抓取處置股資料
 # ==========================================
 
-url = '[https://chengwaye.com/disposal-forecast](https://chengwaye.com/disposal-forecast)'
+url = 'https://chengwaye.com/disposal-forecast'
 headers = {
     'User-Agent': (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,'
