@@ -267,13 +267,12 @@ for _, row in df_stocks.iterrows():
 
 
 # ==========================================
-# 6. 直接發送 Discord 卡片通知
+# 6. 直接發送 Discord 卡片通知 (含處置原因、T日收盤、至今漲跌)
 # ==========================================
 
 df_result = pd.DataFrame(results)
 
 if not df_result.empty:
-    # 篩選焦點標的：剩餘交易日 <= 3 日 或 出現重大漲跌警示
     focus_stocks = []
     normal_stocks = []
 
@@ -288,9 +287,11 @@ if not df_result.empty:
             'name': row['名稱'],
             'market': row['市場'],
             'rem': rem,
+            't0_price': row['T日收盤'],
             'price': row['最新收盤'],
             'pct': row['至今漲跌'],
             'slope': row['處置後月線斜率'],
+            'reason': row['處置原因'] if row['處置原因'] else '未提供',
             'warn': warn,
         }
 
@@ -302,36 +303,38 @@ if not df_result.empty:
     now_iso = datetime.now(timezone.utc).isoformat()
     fields = []
 
-    # 1. 優先加入焦點標的
-    for s in focus_stocks[:15]:
+    # 1. 焦點標的 (出關倒數 <= 3 日 或 重大漲跌警示)
+    for s in focus_stocks[:12]:
         warn_str = f" ｜ {s['warn']}" if s['warn'] else ''
         fields.append({
-            'name': f"🚨 {s['code']} {s['name']} (剩 {s['rem']})",
+            'name': f"🚨 [{s['market']}] {s['code']} {s['name']} (剩 {s['rem']}){warn_str}",
             'value': (
-                f"收盤: **{s['price']}** ({s['pct']}){warn_str}\n"
-                f"處置後斜率: `{s['slope']}`"
+                f"💰 **價格**: T日 `{s['t0_price']}` ➜ 最新 **{s['price']}** ({s['pct']})\n"
+                f"📈 **月線斜率**: `{s['slope']}`\n"
+                f"📝 **處置原因**: {s['reason']}"
             ),
-            'inline': True,
+            'inline': False,
         })
 
-    # 2. 若欄位還有空間，補充其他處置中標的
+    # 2. 其餘處置中標的
     remain_slots = 25 - len(fields)
     if remain_slots > 0 and normal_stocks:
         for s in normal_stocks[:remain_slots]:
             fields.append({
-                'name': f"📌 {s['code']} {s['name']} (剩 {s['rem']})",
+                'name': f"📌 [{s['market']}] {s['code']} {s['name']} (剩 {s['rem']})",
                 'value': (
-                    f"收盤: **{s['price']}** ({s['pct']})\n"
-                    f"處置後斜率: `{s['slope']}`"
+                    f"💰 **價格**: T日 `{s['t0_price']}` ➜ 最新 **{s['price']}** ({s['pct']})\n"
+                    f"📈 **月線斜率**: `{s['slope']}`\n"
+                    f"📝 **處置原因**: {s['reason']}"
                 ),
-                'inline': True,
+                'inline': False,
             })
 
     embed = {
         'title': '📋 處置股預告與走勢追蹤報告',
         'description': (
             f'共追蹤 **{len(df_result)}** 檔處置股。\n'
-            f'🎯 **即將出關 / 焦點標的**：`{len(focus_stocks)}` 檔\n'
+            f'🎯 **焦點標的 (倒數 $\\le$ 3日 / 重大漲跌)**：`{len(focus_stocks)}` 檔\n'
             f'⏳ **其餘處置中標的**：`{len(normal_stocks)}` 檔'
         ),
         'color': 0xF59E0B if focus_stocks else 0x3B82F6,
