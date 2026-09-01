@@ -1,0 +1,6 @@
+pandas
+requests
+yfinance
+lxml
+html5lib
+tabulate
