@@ -12,10 +12,8 @@ import yfinance as yf
 # ==========================================
 
 
-def send_discord_embed(
-    webhook_url, embeds, content_text=None, file_path=None, max_size_mb=8.0
-):
-    """發送 Discord Embed 卡片，支援附件上傳與容量安全防呆"""
+def send_discord_embed(webhook_url, embeds, content_text=None):
+    """直接透過 JSON 發送 Discord Embed 卡片通知"""
     if not webhook_url:
         print('⚠️ 未設定 DISCORD_WEBHOOK_URL，跳過 Discord 發送。')
         return
@@ -25,30 +23,12 @@ def send_discord_embed(
         payload['content'] = content_text
 
     try:
-        if file_path and os.path.exists(file_path):
-            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-            if file_size_mb <= max_size_mb:
-                with open(file_path, 'rb') as f:
-                    files = {
-                        'file': (os.path.basename(file_path), f),
-                        'payload_json': (None, json.dumps(payload)),
-                    }
-                    res = requests.post(webhook_url, files=files, timeout=30)
-            else:
-                print(f'⚠️ 附件大小 ({file_size_mb:.2f} MB) 超標，改為純卡片發送。')
-                res = requests.post(
-                    webhook_url,
-                    json=payload,
-                    headers={'Content-Type': 'application/json'},
-                    timeout=15,
-                )
-        else:
-            res = requests.post(
-                webhook_url,
-                json=payload,
-                headers={'Content-Type': 'application/json'},
-                timeout=15,
-            )
+        res = requests.post(
+            webhook_url,
+            json=payload,
+            headers={'Content-Type': 'application/json'},
+            timeout=15,
+        )
 
         if res.status_code in [200, 204]:
             print('✅ Discord 處置股推播發送成功！')
@@ -268,6 +248,8 @@ for _, row in df_stocks.iterrows():
             warning = '🔴跌逾20%'
         elif pct <= -15:
             warning = '🟠跌逾15%'
+        elif pct >= 20:
+            warning = '🟢漲逾20%'
         else:
             warning = ''
 
@@ -275,8 +257,8 @@ for _, row in df_stocks.iterrows():
             **row,
             'T日收盤': round(price_t0, 2),
             '最新收盤': round(price_latest, 2),
-            '至今漲跌': f'{pct}%',
-            '處置後月線斜率': f'{ma_slope}%' if ma_slope != '-' else '-',
+            '至今漲跌': f'{pct:+.2f}%',
+            '處置後月線斜率': f'{ma_slope:+.2f}%' if ma_slope != '-' else '-',
             '警示': warning,
         })
 
@@ -285,80 +267,80 @@ for _, row in df_stocks.iterrows():
 
 
 # ==========================================
-# 6. 輸出結果與 Discord 通知
+# 6. 直接發送 Discord 卡片通知
 # ==========================================
 
 df_result = pd.DataFrame(results)
-output_csv = 'disposal_stocks_report.csv'
 
 if not df_result.empty:
-    if 'YF_Code' in df_result.columns:
-        df_result = df_result.drop(columns=['YF_Code'])
+    # 篩選焦點標的：剩餘交易日 <= 3 日 或 出現重大漲跌警示
+    focus_stocks = []
+    normal_stocks = []
 
-    cols_order = [
-        '市場',
-        '代號',
-        '名稱',
-        '撮合',
-        '處置起',
-        '出關日',
-        '剩餘交易日',
-        '處置原因',
-        'T日收盤',
-        '最新收盤',
-        '至今漲跌',
-        '處置後月線斜率',
-        '警示',
-    ]
-    df_result = df_result[[c for c in cols_order if c in df_result.columns]]
-
-    # 輸出 UTF-8-SIG CSV 檔（防止 Excel 開啟亂碼）
-    df_result.to_csv(output_csv, index=False, encoding='utf-8-sig')
-    print(f'💾 已輸出分析報告至 {output_csv}')
-
-    # 篩選即將出關 (<= 3 日) 或重挫警示標的
-    urgent_stocks = []
     for _, row in df_result.iterrows():
         rem = str(row['剩餘交易日'])
         warn = str(row['警示'])
         is_near_out = rem in ['今日出關', '1日', '2日', '3日']
         has_warn = warn != ''
 
+        stock_info = {
+            'code': row['代號'],
+            'name': row['名稱'],
+            'market': row['市場'],
+            'rem': rem,
+            'price': row['最新收盤'],
+            'pct': row['至今漲跌'],
+            'slope': row['處置後月線斜率'],
+            'warn': warn,
+        }
+
         if is_near_out or has_warn:
-            urgent_stocks.append({
-                'code': row['代號'],
-                'name': row['名稱'],
-                'rem': rem,
-                'pct': row['至今漲跌'],
-                'slope': row['處置後月線斜率'],
-                'warn': warn,
-            })
+            focus_stocks.append(stock_info)
+        else:
+            normal_stocks.append(stock_info)
 
     now_iso = datetime.now(timezone.utc).isoformat()
     fields = []
-    for s in urgent_stocks[:12]:
+
+    # 1. 優先加入焦點標的
+    for s in focus_stocks[:15]:
         warn_str = f" ｜ {s['warn']}" if s['warn'] else ''
         fields.append({
             'name': f"🚨 {s['code']} {s['name']} (剩 {s['rem']})",
             'value': (
-                f"至今漲跌: **{s['pct']}**{warn_str}\n月線斜率: `{s['slope']}`"
+                f"收盤: **{s['price']}** ({s['pct']}){warn_str}\n"
+                f"處置後斜率: `{s['slope']}`"
             ),
             'inline': True,
         })
 
+    # 2. 若欄位還有空間，補充其他處置中標的
+    remain_slots = 25 - len(fields)
+    if remain_slots > 0 and normal_stocks:
+        for s in normal_stocks[:remain_slots]:
+            fields.append({
+                'name': f"📌 {s['code']} {s['name']} (剩 {s['rem']})",
+                'value': (
+                    f"收盤: **{s['price']}** ({s['pct']})\n"
+                    f"處置後斜率: `{s['slope']}`"
+                ),
+                'inline': True,
+            })
+
     embed = {
         'title': '📋 處置股預告與走勢追蹤報告',
         'description': (
-            f'共追蹤 **{len(df_result)}** 檔處置股，其中 **{len(urgent_stocks)}**'
-            ' 檔即將出關 (<=3日) 或重挫警示。\n📎 詳細統計請查閱附件 CSV 報告。'
+            f'共追蹤 **{len(df_result)}** 檔處置股。\n'
+            f'🎯 **即將出關 / 焦點標的**：`{len(focus_stocks)}` 檔\n'
+            f'⏳ **其餘處置中標的**：`{len(normal_stocks)}` 檔'
         ),
-        'color': 0xF59E0B if urgent_stocks else 0x3B82F6,
+        'color': 0xF59E0B if focus_stocks else 0x3B82F6,
         'fields': fields,
         'footer': {'text': '處置股自動監控'},
         'timestamp': now_iso,
     }
 
     webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
-    send_discord_embed(webhook_url, embeds=[embed], file_path=output_csv)
+    send_discord_embed(webhook_url, embeds=[embed])
 else:
     print('查無有效資料。')
